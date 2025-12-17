@@ -15,13 +15,36 @@ const MONGO_URI = process.env.MONGO_URI;
 const DBNAME = process.env.DBNAME;
 const COLLECTION = process.env.COLLECTION;
 
-const client = new MongoClient(MONGO_URI);
-const db = client.db(DBNAME);
+// MongoDB SSL options - FIX: These need to be passed to MongoClient!
+const mongoOptions = {
+  ssl: true,
+  tls: true,
+  tlsAllowInvalidCertificates: false,
+  tlsAllowInvalidHostnames: false
+};
+
+// Create MongoDB client with SSL options
+const client = new MongoClient(MONGO_URI, mongoOptions);
+let db;
+
+// Connect to MongoDB once at startup
+async function connectToMongoDB() {
+  try {
+    await client.connect();
+    db = client.db(DBNAME);
+    console.log("✅ Connected to MongoDB successfully");
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
+    process.exit(1);
+  }
+}
+
 // Create Express app
 const app = express();
+
 // Middleware
 app.use(cors());
-app.use(express.json()); // replaces body-parser
+app.use(express.json());
 
 // ============ APPOINTMENTS ENDPOINTS ============
 
@@ -43,12 +66,8 @@ app.post("/appointments", async (req, res) => {
       });
     }
 
-    // Connect to MongoDB
-    await client.connect();
-    console.log("Node connected successfully to POST appointment to MongoDB");
-
-    // Reference appointments collection
-    const appointmentsCol = db.collection(appointmentsCollection);
+    // Reference appointments collection - FIX: Use COLLECTION variable
+    const appointmentsCol = db.collection(COLLECTION);
 
     // Create new appointment document
     const newAppointment = {
@@ -95,19 +114,15 @@ app.post("/appointments", async (req, res) => {
     res.status(500).json({ 
       message: "Failed to book appointment: " + error.message 
     });
-  } finally {
-    await client.close();
   }
 });
 
 // GET: Retrieve all appointments
 app.get("/appointments", async (req, res) => {
   try {
-    await client.connect();
-    console.log("Node connected successfully to GET appointments from MongoDB");
-    
+    // FIX: Use COLLECTION variable
     const results = await db
-      .collection(appointmentsCollection)
+      .collection(COLLECTION)
       .find({})
       .limit(100)
       .toArray();
@@ -120,13 +135,28 @@ app.get("/appointments", async (req, res) => {
     res.status(500).json({ 
       message: "Failed to retrieve appointments: " + error.message 
     });
-  } finally {
-    await client.close();
   }
 });
 
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    message: "Server is running",
+    mongoConnected: !!db
+  });
+});
 
-// Start server
-app.listen(PORT, HOST, () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
+// Start server after connecting to MongoDB
+connectToMongoDB().then(() => {
+  app.listen(PORT, HOST, () => {
+    console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+  });
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...');
+  await client.close();
+  process.exit(0);
 });
